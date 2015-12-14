@@ -1,0 +1,268 @@
+#!/bin/bash
+## http://skystreaming.net
+## Copyleft 2015 gajm
+## Released under the WTFPLv2
+
+## Set firefox user-agent / Settare l'user-agent di firefox
+#UA='Mozilla/5.0 (X11; Linux x86_64; rv:38.0) Gecko/20100101 Firefox/38.0 Iceweasel/38.4.0'
+UA='Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:39.0) Gecko/20100101 Firefox/39.0'
+
+## Set Player
+#player="ffplay -autoexit -window_title"
+#player="mplayer -nomouseinput -title"
+#player="mpv --force-window --title"
+player="vlc --qt-minimal-view --meta-title"
+
+## Set firefox cookies.sqlite file if you have multiple profiles
+## Se si hanno più profili settare il file cookies.sqlite di firefox
+ff_cookies="~/.mozilla/firefox/*.default*/cookies.sqlite"
+
+################################################################
+
+## rtmp/hls switch
+stream_type="hls"
+
+if [ "$stream_type" == "rtmp" ]; then
+    yad_title="SkyStreaming"
+elif [ "$stream_type" == "hls" ]; then
+    yad_title="SkyStreamingHLS"
+fi
+
+base_url="https://skystreaming.net"
+cookie=/tmp/skystreaming/cookie.txt
+headers="-H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' -H 'Accept-Language: it-IT,it;q=0.8,en-US;q=0.5,en;q=0.3' -H 'Accept-Encoding: gzip, deflate' -H 'Connection: keep-alive'"
+referer=""
+
+## Check if we have the UA
+if [ "$UA" == "" ]; then
+    yad --center --title="SkyStreaming" --window-icon="gtk-dialog-error" --image="gtk-dialog-error" --text=" <b>Errore:</b>\n User-agent di firefox non settato\!\n Verificare le impostazioni. " --button="_OK:0"
+    exit 1
+fi
+
+## Check nodejs executable
+if [ "$(which nodejs)" ]; then
+    nodejs="nodejs"
+elif [ "$(which node)" ]; then
+    nodejs="node"
+else
+    echo "Error: nodejs not found..."
+    exit 1
+fi
+
+## Let's use a directroy...
+mkdir -p /tmp/skystreaming/
+
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+function cf_bypass() {
+    sed -i '/cf_clearance/d' "$cookie"
+    python sscfbypass.py "$UA" "$cookie" "$base_url"
+    if [ ! "$(grep 'cf_clearance' "$cookie")" ]; then
+        yad --center --title="$yad_title" --window-icon="gtk-dialog-error" --image="gtk-dialog-error" --text=" <b>Errore:</b>\n Accesso fallito\!\n Protezione cloudflare non superata. " --button="_OK:0"
+        clean_tmp
+        exit 1
+    fi
+}
+
+function ff_login() {
+    yad --center --title="$yad_title" --window-icon="gtk-dialog-question" --image="gtk-dialog-question" --text=" <b>Info:</b>\n Premere OK per lanciare firefox ed effettuare il login. " --button="_OK:0"
+    if [ $? -ne 0 ]; then
+        exit
+    fi
+    firefox "$base_url/login" &
+    yad --center --title="$yad_title" --window-icon="gtk-dialog-info" --image="gtk-dialog-info" --text=" <b>Info:</b>\n Premere OK dopo aver effettuato il login. " --button="_OK:0"
+    if [ $? -ne 0 ]; then
+        exit
+    fi
+    ## Thanks to Darby_Crash for this code. ;)
+    echo -e ".mode tabs\n.header off\nselect host,\ncase substr(host,1,1)='.' when 0 then 'FALSE' else 'TRUE' end,\npath,\ncase isSecure when 0 then 'FALSE' else 'TRUE' end,\nexpiry,\nname,\nvalue\nfrom moz_cookies where baseDomain glob '*skystreaming*';" >  /tmp/skystreaming/sqlite-command.txt
+    sqlite3 -separator "    " ${ff_cookies/#\~/$HOME} < /tmp/skystreaming/sqlite-command.txt > /tmp/skystreaming/cookie.txt
+    curl -A "$UA" "$headers" -b $cookie -c $cookie "$base_url/login" -D- > /tmp/skystreaming/login-page.txt
+    if [ "$(head -n1 /tmp/skystreaming/login-page.txt | awk '{print $2}')" != 302 ]; then
+        yad --center --title="$yad_title" --window-icon="gtk-dialog-error" --image="gtk-dialog-error" --text=" <b>Errore:</b>\n Login fallito\!\n Verificare le impostazioni. " --button="_OK:0"
+        clean_tmp
+        exit 1
+    fi
+}
+
+function check_login() {
+    if [ ! -f /tmp/skystreaming/cookie.txt ]; then
+        ff_login
+    else
+        curl -A "$UA" "$headers" -b $cookie -c $cookie "$base_url/login" -D- > /tmp/skystreaming/login-page.txt
+        if [ "$(head -n1 /tmp/skystreaming/login-page.txt | awk '{print $2}')" != 302 ]; then
+            if [ "$(head -n1 /tmp/skystreaming/login-page.txt | awk '{print $2}')" == 503 ]; then
+                cf_bypass
+                curl -A "$UA" "$headers" -b $cookie -c $cookie "$base_url/login" -D- > /tmp/skystreaming/login-page.txt
+            fi
+            if [[ "$(head -n1 /tmp/skystreaming/login-page.txt | awk '{print $2}')" == 200 && "$(grep '<form method="POST"' /tmp/skystreaming/login-page.txt)" ]]; then
+                ff_login
+            elif [ "$(head -n1 /tmp/skystreaming/login-page.txt | awk '{print $2}')" != 302 ]; then
+                yad --center --title="$yad_title" --window-icon="gtk-dialog-error" --image="gtk-dialog-error" --text=" <b>Errore fatale\!</b>\n Lo script potrebbe essere fuori uso. " --button="_OK:0"
+                clean_tmp
+                exit 1
+            fi
+        fi
+    fi
+}
+
+function select_category() {
+    if [ "$referer" == "" ]; then
+        curl -A "$UA" "$headers" -b $cookie -c $cookie "$base_url" -D- > /tmp/skystreaming/main-page.txt
+    else
+        curl -A "$UA" "$headers" -b $cookie -c $cookie --referer "$referer" "$base_url" -D- > /tmp/skystreaming/main-page.txt
+    fi
+    if [ "$(head -n1 /tmp/skystreaming/main-page.txt | awk '{print $2}')" == 503 ]; then
+        cf_bypass
+        if [ "$referer" == "" ]; then
+            curl -A "$UA" "$headers" -b $cookie -c $cookie "$base_url" > /tmp/skystreaming/main-page.txt
+        else
+            curl -A "$UA" "$headers" -b $cookie -c $cookie --referer "$referer" "$base_url" > /tmp/skystreaming/main-page.txt
+        fi
+    fi
+    referer="$base_url"
+    cat_data=`cat /tmp/skystreaming/main-page.txt | tr -d '\n' | grep -Po '<div class="col-md-3"(.*?)</div>' | grep '/canali/'`
+    echo "$cat_data" | grep -o 'href="[^"]*' | cut -d'"' -f2 > /tmp/skystreaming/cat-url.txt
+    echo "$cat_data" | grep -Po '<span(.*?)</span>' | cut -d'>' -f2 | cut -d'<' -f1 | sed 's/ in [Ss]treaming//g;s/ [Ss]treaming//g;s/Canali //g' > /tmp/skystreaming/cat-name.txt
+    paste -d'|' /tmp/skystreaming/cat-name.txt /tmp/skystreaming/cat-url.txt > /tmp/skystreaming/category.txt
+    preferiti=`cat /tmp/skystreaming/main-page.txt | tr -d '\n' | grep -Po '<div class="col-md-4 login(.*?)</div>' | grep -Po '<li(.*?)class="fa fa-heart-o"(.*?)</li>' | grep -o 'href="[^"]*' | tac | head -n1 | cut -d'"' -f2`
+    if [ "$preferiti" != "" ]; then
+        echo "Preferiti|$preferiti" >> /tmp/skystreaming/category.txt
+    fi
+    cat_choise=`cut -d'|' -f1  | yad --list --center --height=375 --width=250 --title="$yad_title" --text="Seleziona una
+    categoria:" --column="Canali" --button="_Esci:1" --button="_Logout:100" --button="_OK:0"`
+    echo $cat_choise
+    case $? in
+        100) get_out ;;
+        0) get_channels ;;
+        *) exit ;;
+    esac
+}
+
+function get_channels() {
+    if [ "$cat_choise" == "" ]; then
+        yad --center --title="$yad_title" --window-icon="gtk-dialog-info" --image="gtk-dialog-info" --text=" <b>Avviso:</b>\n Selezionare una categoria. " --button="_OK:0"
+        continue
+    fi
+    cat_url=`grep -m1 "$cat_choise" /tmp/skystreaming/category.txt | cut -d'|' -f2`
+    curl -A "$UA" "$headers" -b $cookie -c $cookie --referer "$referer" "$cat_url" -D- > /tmp/skystreaming/chans-page.txt
+    if [ "$(head -n1 /tmp/skystreaming/chans-page.txt | awk '{print $2}')" == 503 ]; then
+        cf_bypass
+        curl -A "$UA" "$headers" -b $cookie -c $cookie --referer "$referer" "$cat_url" > /tmp/skystreaming/chans-page.txt
+    fi
+    referer="$cat_url"
+    if [ "$cat_choise" == "Preferiti|" ]; then
+        chan_data=`cat /tmp/skystreaming/chans-page.txt | tr -d '\n' | grep -Po '<div class="center"(.*?)<div class="col-md-3">'`
+        echo "$chan_data" | grep -o 'href="[^"]*' | grep -v 'href="#"' | cut -d'"' -f2 > /tmp/skystreaming/chans-url.txt
+        echo "$chan_data" | grep -Po '<h4(.*?)</h4>' | cut -d'>' -f2 | cut -d'<' -f1 | sed 's/|/-/g' | sed 's/\&amp;/\&/g' | sed "s/\&#039;/'/g" | sed 's/\&//g' | sed 's/ in [Ss]treaming//g;s/ [Ss]treaming//g;s/ [Dd]iretta//g;s/ [Gg]ratis//g;s/Guarda //g;s/ HD Live//g;s/ HD//g;s/ LIVE//g;s/ live//g' > /tmp/skystreaming/chans-name.txt
+        paste -d'|' /tmp/skystreaming/chans-name.txt /tmp/skystreaming/chans-url.txt > /tmp/skystreaming/channels.txt
+    else
+        chan_data=`cat /tmp/skystreaming/chans-page.txt | tr -d '\n' | grep -Po '<div class="col-md-4"(.*?)</div>'| grep '/canali/' | grep -v 'color:red'`
+        echo "$chan_data" | grep -o 'href="[^"]*' | grep -v 'href="#"' | cut -d'"' -f2 > /tmp/skystreaming/chans-url.txt
+        echo "$chan_data" | grep -Po '<h4(.*?)</h4>' | cut -d'>' -f2 | cut -d'<' -f1 | sed 's/|/-/g' | sed 's/\&amp;/\&/g' | sed "s/\&#039;/'/g" | sed 's/\&//g' | sed 's/ in [Ss]treaming//g;s/ [Ss]treaming//g;s/ [Dd]iretta//g;s/ [Gg]ratis//g;s/Guarda //g;s/ HD Live//g;s/ HD//g;s/ LIVE//g;s/ live//g' > /tmp/skystreaming/chans-name.txt
+        paste -d'|' /tmp/skystreaming/chans-name.txt /tmp/skystreaming/chans-url.txt > /tmp/skystreaming/channels.txt
+    fi
+    if [ ! -s /tmp/skystreaming/channels.txt ]; then
+        yad --center --title="$yad_title" --window-icon="gtk-dialog-info" --image="gtk-dialog-info" --text=" ${cat_choise%?}: \n No online channels found. " --button="_OK:0"
+        continue
+    fi
+}
+
+function select_channel() {
+    chan_choise=`cut -d'|' -f1 /tmp/skystreaming/channels.txt | sort -uf | yad --list --center --height=450 --width=250 --title="$yad_title" --text="${cat_choise%?}:" --column="Canali" --button="_Annulla:1" --button="_GuidaTV:100" --button="_Play:0"`
+    case $? in
+        100) show_epg ;;
+        0) get_stream ;;
+        *) break ;;
+    esac
+}
+
+function show_epg() {
+    if [ "$chan_choise" == "" ]; then
+        yad --center --title="$yad_title" --window-icon="gtk-dialog-info" --image="gtk-dialog-info" --text=" <b>Avviso:</b>\n Selezionare un canale. " --button="_OK:0"
+        continue
+    fi
+    chan_url=`grep -i -m1 "$chan_choise" /tmp/skystreaming/channels.txt | cut -d'|' -f2`
+    curl -A "$UA" "$headers" -b $cookie -c $cookie --referer "$referer" "$chan_url" -L -D- > /tmp/skystreaming/chan-page.txt
+    if [ "$(head -n1 /tmp/skystreaming/chan-page.txt | awk '{print $2}')" == 503 ]; then
+        cf_bypass
+        curl -A "$UA" "$headers" -b $cookie -c $cookie --referer "$referer" "$chan_url" -L > /tmp/skystreaming/chan-page.txt
+    fi
+    cat /tmp/skystreaming/chan-page.txt | tr -d '\n' | grep -Po '<div class="carousel-inner"(.*?)</div>' | grep -Po '<p(.*?)</p>' | cut -d'>' -f2 | cut -d'<' -f1 | sed 's/\&amp;/\&/g' | sed "s/\&#039;/'/g" > /tmp/skystreaming/epg.txt
+    if [ -s /tmp/skystreaming/epg.txt ]; then
+        cat /tmp/skystreaming/epg.txt | yad --center --text-info --listen --title="SkyStreaming - GuidaTV" --text="${chan_choise%?}:" --height=450 --width=350 --button="_OK:0"
+        continue
+    else
+        yad --center --title="$yad_title" --window-icon="gtk-dialog-info" --image="gtk-dialog-info" --text=" ${chan_choise%?}: \n Guida-TV non disponibile. " --button="_OK:0"
+        continue
+    fi
+}
+
+function get_stream() {
+    if [ "$chan_choise" == "" ]; then
+        yad --center --title="$yad_title" --window-icon="gtk-dialog-info" --image="gtk-dialog-info" --text=" <b>Avviso:</b>\n Selezionare un canale. " --button="_OK:0"
+        continue
+    fi
+    chan_url=`grep -i -m1 "$chan_choise" /tmp/skystreaming/channels.txt | cut -d'|' -f2`
+    curl -A "$UA" "$headers" -b $cookie -c $cookie --referer "$referer" "$chan_url" -L -D- > /tmp/skystreaming/chan-page.txt
+    if [ "$(head -n1 /tmp/skystreaming/chan-page.txt | awk '{print $2}')" == 503 ]; then
+        cf_bypass
+        curl -A "$UA" "$headers" -b $cookie -c $cookie --referer "$referer" "$chan_url" -L > /tmp/skystreaming/chan-page.txt
+    fi
+    if [ "$(grep -P 'class="fa(.*?)fa-sign-in"' /tmp/skystreaming/chan-page.txt)" ]; then
+        ff_login
+        continue
+    fi
+    flash_vars=`grep -Po 'unescape\((.*)\)' /tmp/skystreaming/chan-page.txt`
+    if [ "$flash_vars" != "" ]; then
+        echo 'unescape=function(e,n,p){for(z=e,i=0;i<n.length;i++)z=z.replace(new RegExp(n[i],"g"),p[i]);z=z.replace(new RegExp("%26","g"),"&"),z=z.replace(new RegExp("%3B","g"),";"),console.log(z.replace("<!--?--><?","<!--?-->")),e="",n="",p="",z=""};' > /tmp/skystreaming/flash-vars.js
+        echo "$flash_vars" >> /tmp/skystreaming/flash-vars.js
+        $nodejs /tmp/skystreaming/flash-vars.js > /tmp/skystreaming/flash-vars.txt
+        stream_data=`grep -m1 -Po "var(.*?)sData(.*?)=(.*?)'[^']*" /tmp/skystreaming/flash-vars.txt | cut -d"'" -f2`
+    else
+        stream_data=`grep -m1 -Po "var(.*?)sData(.*?)=(.*?)'[^']*" /tmp/skystreaming/chan-page.txt | cut -d"'" -f2`
+    fi
+    if [ "$stream_type" == "rtmp" ]; then
+        stream=`python sscallinit.py "$stream_data" | grep -o '"url":"rtmp[^"]*' | cut -d'"' -f4 | sed 's/\&amp;/\&/g' | tr -d '\\\'`
+    elif [ "$stream_type" == "hls" ]; then
+        stream=`python sscallinit.py "$stream_data" | grep -o '"url":"http[^"]*' | cut -d'"' -f4 | sed 's/\&amp;/\&/g' | tr -d '\\\'`
+    fi
+    if [ "$stream" == "" ]; then
+        yad --center --title="$yad_title" --window-icon="gtk-dialog-error" --image="gtk-dialog-error" --text=" <b>Errore:</b>\n Nessun flusso trovato! " --button="_OK:0"
+        continue
+    fi
+    if [ "$stream_type" == "rtmp" ]; then
+        play_stream
+    elif [ "$stream_type" == "hls" ]; then
+        play_hls_stream
+    fi
+}
+
+function play_stream() {
+    swf="https://ssl.p.jwpcdn.com/6/12/jwplayer.flash.swf"
+    rtmpdump -r "$stream" -a "$(basename $(dirname $stream))/" -t "$(dirname $stream)/" -y "$(basename $stream)" -p "$chan_url" -W "$swf" -f 'WIN 19,0,0,226' -v --timeout 15 | $player "${chan_choise%?}" -
+}
+
+function play_hls_stream() {
+    cookie_vals=`grep skystreaming.net $cookie | awk '{print $6"="$7}' | tr '\n' ';'`
+    livestreamer --player "$player \"${chan_choise%?}\"" "hls://$stream headers={'User-Agent': \"$UA\", 'Cookie': \"${cookie_vals%?}\"}" best
+    echo $stream
+}
+
+function get_out() {
+    curl -A "$UA" "$headers" -b $cookie -c $cookie --referer "$referer" "$base_url/logout" -D- -L > /dev/null #/tmp/skystreaming/logout.txt
+    rm -rf /tmp/skystreaming/
+    exit 0
+}
+
+function clean_tmp() {
+    rm -rf /tmp/skystreaming/
+}
+
+check_login    
+while [ $? -eq 0 ]; do
+    select_category
+    while [ $? -eq 0 ]; do
+        select_channel
+    done
+done
