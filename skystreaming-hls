@@ -126,10 +126,24 @@ function select_category() {
     echo "$cat_data" | grep -Po '<span(.*?)</span>' | cut -d'>' -f2 | cut -d'<' -f1 | sed 's/ in [Ss]treaming//g;s/ [Ss]treaming//g;s/Canali //g' > /tmp/skystreaming/cat-name.txt
     paste -d'|' /tmp/skystreaming/cat-name.txt /tmp/skystreaming/cat-url.txt > /tmp/skystreaming/category.txt
     preferiti=`cat /tmp/skystreaming/main-page.txt | tr -d '\n' | grep -Po '<div class="col-md-4 login(.*?)</div>' | grep -Po '<li(.*?)class="fa fa-heart-o"(.*?)</li>' | grep -o 'href="[^"]*' | tac | head -n1 | cut -d'"' -f2`
+    
+    #SERGIO
+    filename="/tmp/skystreaming/cat-url.txt"
+    while read -r line
+    do
+	name=$line
+	echo "cat-url - $name"
+    done < "$filename"
+    #SERGIO
+    
+    
     if [ "$preferiti" != "" ]; then
         echo "Preferiti|$preferiti" >> /tmp/skystreaming/category.txt
     fi
     cat_choise=`cut -d'|' -f1 /tmp/skystreaming/category.txt | yad --list --center --height=375 --width=250 --title="$yad_title" --text="Seleziona una categoria:" --column="Canali" --button="_Esci:1" --button="_Logout:100" --button="_OK:0"`
+    
+
+    
     case $? in
         100) get_out ;;
         0) get_channels ;;
@@ -156,10 +170,23 @@ function get_channels() {
         paste -d'|' /tmp/skystreaming/chans-name.txt /tmp/skystreaming/chans-url.txt > /tmp/skystreaming/channels.txt
     else
         chan_data=`cat /tmp/skystreaming/chans-page.txt | tr -d '\n' | grep -Po '<div class="col-md-4"(.*?)</div>'| grep '/canali/' | grep -v 'color:red'`
+        
         echo "$chan_data" | grep -o 'href="[^"]*' | grep -v 'href="#"' | cut -d'"' -f2 > /tmp/skystreaming/chans-url.txt
         echo "$chan_data" | grep -Po '<h4(.*?)</h4>' | cut -d'>' -f2 | cut -d'<' -f1 | sed 's/|/-/g' | sed 's/\&amp;/\&/g' | sed "s/\&#039;/'/g" | sed 's/\&//g' | sed 's/ in [Ss]treaming//g;s/ [Ss]treaming//g;s/ [Dd]iretta//g;s/ [Gg]ratis//g;s/Guarda //g;s/ HD Live//g;s/ HD//g;s/ LIVE//g;s/ live//g' > /tmp/skystreaming/chans-name.txt
         paste -d'|' /tmp/skystreaming/chans-name.txt /tmp/skystreaming/chans-url.txt > /tmp/skystreaming/channels.txt
     fi
+    
+    
+   #SERGIO
+    filename="/tmp/skystreaming/chans-url.txt"
+    while read -r line
+    do
+	name=$line
+	echo "chans-url - $name"
+    done < "$filename"
+    #SERGIO
+    
+    
     if [ ! -s /tmp/skystreaming/channels.txt ]; then
         yad --center --title="$yad_title" --window-icon="gtk-dialog-info" --image="gtk-dialog-info" --text=" ${cat_choise%?}: \n No online channels found. " --button="_OK:0"
         continue
@@ -244,7 +271,10 @@ function play_stream() {
 function play_hls_stream() {
     cookie_vals=`grep skystreaming.net $cookie | awk '{print $6"="$7}' | tr '\n' ';'`
     livestreamer --player "$player \"${chan_choise%?}\"" "hls://$stream headers={'User-Agent': \"$UA\", 'Cookie': \"${cookie_vals%?}\"}" best
-    echo $stream
+    
+    #SERGIO
+    echo "stream link: $stream"
+    #SERGIO
 }
 
 function get_out() {
