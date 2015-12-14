@@ -11,7 +11,7 @@ UA='Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:39.0) Gecko/20100101 Firefox/39.0
 #player="ffplay -autoexit -window_title"
 #player="mplayer -nomouseinput -title"
 #player="mpv --force-window --title"
-player="vlc --qt-minimal-view --meta-title"
+player="vlc --file-caching=5000 --qt-minimal-view --meta-title"
 
 ## Set firefox cookies.sqlite file if you have multiple profiles
 ## Se si hanno più profili settare il file cookies.sqlite di firefox
@@ -20,7 +20,7 @@ ff_cookies="~/.mozilla/firefox/*.default*/cookies.sqlite"
 ################################################################
 
 ## rtmp/hls switch
-stream_type="hls"
+stream_type="rtmp"
 
 if [ "$stream_type" == "rtmp" ]; then
     yad_title="SkyStreaming"
@@ -244,7 +244,6 @@ function play_stream() {
 function play_hls_stream() {
     cookie_vals=`grep skystreaming.net $cookie | awk '{print $6"="$7}' | tr '\n' ';'`
     livestreamer --player "$player \"${chan_choise%?}\"" "hls://$stream headers={'User-Agent': \"$UA\", 'Cookie': \"${cookie_vals%?}\"}" best
-    echo $stream
 }
 
 function get_out() {
